@@ -27,7 +27,7 @@ export default function AuthCallback() {
       }
 
       const { error: upsertError } = await supabase
-        .from('users')
+        .from('profiles')
         .upsert(
           {
             id: user.id,
@@ -43,17 +43,17 @@ export default function AuthCallback() {
         throw upsertError
       }
 
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('quiz_completed')
-        .eq('id', user.id)
-        .single()
+      const { data: quizData, error: quizError } = await supabase
+        .from('quiz_answers')
+        .select('id')
+        .eq('user_id', user.id)
+        .limit(1)
 
-      if (userError) {
-        throw userError
+      if (quizError) {
+        throw quizError
       }
 
-      const nextPath = userData?.quiz_completed ? '/results' : '/quiz'
+      const nextPath = (quizData ?? []).length > 0 ? '/results' : '/quiz'
       navigate(nextPath, { replace: true })
     }
 

@@ -24,7 +24,7 @@ const AuthContext = createContext<AuthState | undefined>(undefined)
 
 async function ensureUserRecord(user: User) {
   const { error } = await supabase
-    .from('users')
+    .from('profiles')
     .upsert(
       {
         id: user.id,
