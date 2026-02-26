@@ -34,6 +34,13 @@ export default function Quiz() {
     let active = true
 
     const loadQuestions = async () => {
+      if (import.meta.env.DEV) {
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+        console.info(
+          '[quiz] fetching:',
+          `${supabaseUrl}/rest/v1/quiz_questions?select=id,question,type,options,order_index&order=order_index.asc`,
+        )
+      }
       const { data, error: fetchError } = await supabase
         .from('quiz_questions')
         .select('id, question, type, options, order_index')
