@@ -20,6 +20,20 @@ type RecommendationRow = {
   } | null
 }
 
+type RecommendationApiRow = {
+  id: string
+  score: number
+  reason: string | null
+  product: {
+    id: string
+    title: string
+    brand: string | null
+    price_cents: number
+    images: string[] | null
+    tags: string[] | null
+  }[]
+}
+
 export default function Results() {
   const navigate = useNavigate()
   const { currentUser } = useAuth()
@@ -53,7 +67,17 @@ export default function Results() {
       }
 
       if (!active) return
-      setItems((data ?? []) as RecommendationRow[])
+      const normalized = (data ?? []).map((row) => {
+        const record = row as RecommendationApiRow
+        return {
+          id: record.id,
+          score: record.score,
+          reason: record.reason,
+          product: record.product?.[0] ?? null,
+        }
+      })
+
+      setItems(normalized)
       setLoading(false)
     }
 
