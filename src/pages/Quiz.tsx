@@ -48,6 +48,29 @@ export default function Quiz() {
 
       if (!active) return
       if (fetchError) {
+        console.error('quiz_questions fetch failed', {
+          status: fetchError.status,
+          code: fetchError.code,
+          message: fetchError.message,
+          details: fetchError.details,
+        })
+
+        if (fetchError.code === 'PGRST205') {
+          setError(
+            'Quiz table is missing. Please run Supabase migrations for quiz_questions.',
+          )
+          setLoading(false)
+          return
+        }
+
+        if (fetchError.status === 401 || fetchError.status === 403) {
+          setError(
+            'You do not have access to quiz questions. Check RLS policies.',
+          )
+          setLoading(false)
+          return
+        }
+
         throw fetchError
       }
 
