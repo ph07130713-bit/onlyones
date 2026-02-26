@@ -1,90 +1,98 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import Card from '../components/Card'
-import Button from '../components/Button'
 import { useAuth } from '../lib/auth'
-import { generateRecommendationsForUser } from '../lib/recommend'
 import { supabase } from '../lib/supabase'
+
+type ProductRow = {
+  id: string
+  title: string
+  brand: string | null
+  price_cents: number
+  images: string[] | null
+  tags: string[] | null
+  attributes: {
+    occasion?: string[] | string
+  } | null
+}
+
+type QuizAnswerRow = {
+  answer: string | string[] | number | null
+}
 
 type RecommendationRow = {
   id: string
   score: number
-  reason: string | null
-  product: {
-    id: string
-    title: string
-    brand: string | null
-    price_cents: number
-    images: string[] | null
-    tags: string[] | null
-  } | null
-}
-
-type RecommendationApiRow = {
-  id: string
-  score: number
-  reason: string | null
-  product: {
-    id: string
-    title: string
-    brand: string | null
-    price_cents: number
-    images: string[] | null
-    tags: string[] | null
-  }[]
+  product: ProductRow
 }
 
 export default function Results() {
-  const navigate = useNavigate()
   const { currentUser } = useAuth()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<RecommendationRow[]>([])
-  const [saving, setSaving] = useState(false)
-  const [selected, setSelected] = useState<Record<string, RecommendationRow>>({})
 
   useEffect(() => {
     let active = true
 
     const run = async () => {
       if (!currentUser) {
-        setError('Sign in to view your results.')
+        setError('Failed to generate recommendations')
         setLoading(false)
         return
       }
 
-      await generateRecommendationsForUser(currentUser.id)
-      const { data, error: fetchError } = await supabase
-        .from('recommendations')
-        .select(
-          'id, score, reason, product:products(id, title, brand, price_cents, images, tags)',
-        )
+      const { data: answerData, error: answerError } = await supabase
+        .from('quiz_answers')
+        .select('answer')
         .eq('user_id', currentUser.id)
-        .order('score', { ascending: false })
 
-      if (fetchError) {
-        throw fetchError
+      if (answerError) {
+        console.error('quiz_answers fetch failed', {
+          code: answerError.code,
+          message: answerError.message,
+        })
+        throw answerError
+      }
+
+      const { data: productData, error: productError } = await supabase
+        .from('products')
+        .select('id, title, brand, price_cents, images, tags, attributes, active')
+        .eq('active', true)
+
+      if (productError) {
+        console.error('products fetch failed', {
+          code: productError.code,
+          message: productError.message,
+        })
+        throw productError
       }
 
       if (!active) return
-      const normalized = (data ?? []).map((row) => {
-        const record = row as RecommendationApiRow
-        return {
-          id: record.id,
-          score: record.score,
-          reason: record.reason,
-          product: record.product?.[0] ?? null,
-        }
-      })
 
-      setItems(normalized)
+      const { preferredTags, occasionTags, budget } = buildPreferences(
+        (answerData ?? []) as QuizAnswerRow[],
+      )
+
+      const recommendations = (productData ?? [])
+        .map((product) => {
+          const casted = product as ProductRow
+          const score = scoreProduct(casted, preferredTags, occasionTags, budget)
+          return { id: casted.id, product: casted, score }
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 12)
+
+      setItems(recommendations)
       setLoading(false)
     }
 
     run().catch((err) => {
       if (!active) return
-      console.error(err)
-      setError('Failed to generate recommendations. Please try again.')
+      console.error('recommendations failed', {
+        code: err?.code,
+        message: err?.message,
+      })
+      setError('Failed to generate recommendations')
       setLoading(false)
     })
 
@@ -92,70 +100,6 @@ export default function Results() {
       active = false
     }
   }, [currentUser])
-
-  const selectedList = useMemo(() => Object.values(selected), [selected])
-
-  const totalAmount = useMemo(
-    () =>
-      selectedList.reduce(
-        (sum, item) => sum + (item.product?.price_cents ?? 0),
-        0,
-      ),
-    [selectedList],
-  )
-
-  const toggleSelect = (item: RecommendationRow) => {
-    if (!item.product) return
-    setSelected((prev) => {
-      const exists = prev[item.product!.id]
-      if (exists) {
-        const next = { ...prev }
-        delete next[item.product!.id]
-        return next
-      }
-      if (Object.keys(prev).length >= 5) {
-        return prev
-      }
-      return { ...prev, [item.product!.id]: item }
-    })
-  }
-
-  const handleCreateOrder = async () => {
-    if (!currentUser || selectedList.length === 0) return
-    setSaving(true)
-    setError(null)
-
-    try {
-      const itemsPayload = selectedList.map((item) => ({
-        product_id: item.product?.id,
-        title: item.product?.title,
-        price_cents: item.product?.price_cents,
-      }))
-
-      const { data, error: insertError } = await supabase
-        .from('orders')
-        .insert({
-          user_id: currentUser.id,
-          status: 'pending',
-          items: itemsPayload,
-          amount_cents: totalAmount,
-          currency: 'USD',
-        })
-        .select('id')
-        .single()
-
-      if (insertError) {
-        throw insertError
-      }
-
-      navigate('/checkout', { replace: true, state: { orderId: data?.id } })
-    } catch (err) {
-      console.error(err)
-      setError('Failed to create your Fix Box. Please try again.')
-    } finally {
-      setSaving(false)
-    }
-  }
 
   return (
     <section className="page results">
@@ -167,13 +111,8 @@ export default function Results() {
           <div className="results-grid">
             {items.map((item) => {
               const product = item.product
-              if (!product) return null
-              const selectedState = Boolean(selected[product.id])
               return (
-                <article
-                  key={item.id}
-                  className={`result-card ${selectedState ? 'is-selected' : ''}`}
-                >
+                <article key={item.id} className="result-card">
                   <div className="result-media">
                     {product.images?.[0] ? (
                       <img src={product.images[0]} alt={product.title} />
@@ -192,15 +131,6 @@ export default function Results() {
                         <span key={tag}>{tag}</span>
                       ))}
                     </div>
-                    {item.reason ? (
-                      <p className="result-reason">{item.reason}</p>
-                    ) : null}
-                    <Button
-                      variant={selectedState ? 'ghost' : 'primary'}
-                      onClick={() => toggleSelect(item)}
-                    >
-                      {selectedState ? 'Remove' : 'Add to Fix Box'}
-                    </Button>
                   </div>
                 </article>
               )
@@ -208,39 +138,112 @@ export default function Results() {
           </div>
         ) : null}
       </Card>
-      {!loading && !error ? (
-        <Card>
-          <h2>My Fix Box</h2>
-          <p className="muted">
-            Select up to 5 items. {selectedList.length}/5 chosen.
-          </p>
-          {selectedList.length > 0 ? (
-            <ul className="fix-list">
-              {selectedList.map((item) => (
-                <li key={item.product?.id}>
-                  <span>{item.product?.title}</span>
-                  <span>
-                    ${(item.product?.price_cents ?? 0) / 100}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted">Pick items you want to try on.</p>
-          )}
-          <div className="fix-actions">
-            <span className="fix-total">
-              Total: ${(totalAmount / 100).toFixed(2)}
-            </span>
-            <Button
-              onClick={handleCreateOrder}
-              disabled={saving || selectedList.length === 0}
-            >
-              {saving ? 'Creating...' : 'Create Fix Box'}
-            </Button>
-          </div>
-        </Card>
-      ) : null}
     </section>
   )
+}
+
+type BudgetRange = {
+  min: number
+  max: number | null
+}
+
+const normalize = (value: string) => value.trim().toLowerCase()
+
+const budgetFromScale = (value: number): BudgetRange => {
+  switch (value) {
+    case 1:
+      return { min: 0, max: 30000 }
+    case 2:
+      return { min: 30000, max: 50000 }
+    case 3:
+      return { min: 50000, max: 100000 }
+    case 4:
+      return { min: 100000, max: 200000 }
+    case 5:
+      return { min: 200000, max: null }
+    default:
+      return { min: 0, max: null }
+  }
+}
+
+const buildPreferences = (answers: QuizAnswerRow[]) => {
+  const preferredTags = new Set<string>()
+  const occasionTags = new Set<string>()
+  let budget: BudgetRange | null = null
+
+  for (const row of answers) {
+    const value = row.answer
+    if (typeof value === 'string') {
+      preferredTags.add(normalize(value))
+      if (['work', 'casual', 'date', 'travel', 'workout', 'events'].includes(
+        normalize(value),
+      )) {
+        occasionTags.add(normalize(value))
+      }
+      continue
+    }
+
+    if (Array.isArray(value)) {
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .forEach((item) => {
+          const normalized = normalize(item)
+          preferredTags.add(normalized)
+          if (
+            ['work', 'casual', 'date', 'travel', 'workout', 'events'].includes(
+              normalized,
+            )
+          ) {
+            occasionTags.add(normalized)
+          }
+        })
+      continue
+    }
+
+    if (typeof value === 'number') {
+      budget = budgetFromScale(value)
+    }
+  }
+
+  return { preferredTags, occasionTags, budget }
+}
+
+const scoreProduct = (
+  product: ProductRow,
+  preferredTags: Set<string>,
+  occasionTags: Set<string>,
+  budget: BudgetRange | null,
+) => {
+  let score = 0
+  const tags = (product.tags ?? []).map(normalize)
+  for (const tag of preferredTags) {
+    if (tags.includes(tag)) {
+      score += 2
+    }
+  }
+
+  const occasions = Array.isArray(product.attributes?.occasion)
+    ? product.attributes?.occasion ?? []
+    : product.attributes?.occasion
+      ? [product.attributes.occasion]
+      : []
+
+  const normalizedOccasions = occasions.map((item) => normalize(item))
+  for (const occ of occasionTags) {
+    if (normalizedOccasions.includes(occ)) {
+      score += 2
+    }
+  }
+
+  if (budget) {
+    if (budget.max !== null && product.price_cents > budget.max) {
+      score -= 2
+    } else if (product.price_cents >= budget.min) {
+      score += 2
+    } else {
+      score -= 1
+    }
+  }
+
+  return score
 }
