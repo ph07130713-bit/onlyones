@@ -1,15 +1,13 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { signOut } from 'firebase/auth'
-import { auth } from '../lib/firebase'
 import { useAuth } from '../lib/auth'
 import Button from './Button'
 
 export default function Header() {
-  const { user } = useAuth()
+  const { currentUser, signOut } = useAuth()
   const navigate = useNavigate()
 
   const handleSignOut = async () => {
-    await signOut(auth)
+    await signOut()
     navigate('/login')
   }
 
@@ -24,7 +22,7 @@ export default function Header() {
         <Link to="/account">Account</Link>
       </nav>
       <div className="app-actions">
-        {user ? (
+        {currentUser ? (
           <Button variant="ghost" onClick={handleSignOut}>
             Sign out
           </Button>

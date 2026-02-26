@@ -7,6 +7,7 @@ import Results from './pages/Results'
 import ItemDetail from './pages/ItemDetail'
 import Account from './pages/Account'
 import AuthCallback from './pages/AuthCallback'
+import Checkout from './pages/Checkout'
 import ProtectedRoute from './routes/ProtectedRoute'
 
 function App() {
@@ -19,6 +20,7 @@ function App() {
         <Route element={<ProtectedRoute />}>
           <Route path="quiz" element={<Quiz />} />
           <Route path="results" element={<Results />} />
+          <Route path="checkout" element={<Checkout />} />
           <Route path="item/:id" element={<ItemDetail />} />
           <Route path="account" element={<Account />} />
         </Route>
