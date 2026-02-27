@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import Button from '../components/Button'
 import Card from '../components/Card'
@@ -19,6 +20,10 @@ export default function Landing() {
   const location = useLocation()
   const language = location.pathname === '/ko' ? 'ko' : 'en'
   const text = content[language]
+
+  useEffect(() => {
+    window.localStorage.setItem('app_locale', language)
+  }, [language])
 
   return (
     <section className="page landing">

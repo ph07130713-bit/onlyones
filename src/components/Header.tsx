@@ -5,6 +5,8 @@ import Button from './Button'
 const getCurrentLanguage = (pathname: string) => {
   if (pathname === '/ko' || pathname.startsWith('/ko/')) return 'ko'
   if (pathname === '/en' || pathname.startsWith('/en/')) return 'en'
+  const saved = window.localStorage.getItem('app_locale')
+  if (saved === 'ko' || saved === 'en') return saved
   return 'en'
 }
 
@@ -20,6 +22,7 @@ export default function Header() {
   }
 
   const handleLanguageChange = (nextLanguage: string) => {
+    window.localStorage.setItem('app_locale', nextLanguage)
     navigate(nextLanguage === 'ko' ? '/ko' : '/en')
   }
 

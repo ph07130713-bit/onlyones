@@ -54,9 +54,13 @@ export default function Quiz() {
     let active = true
 
     const loadQuestions = async () => {
+      const preferredLocale =
+        window.localStorage.getItem('app_locale') === 'ko' ? 'ko' : 'en'
+
       const { data, error: fetchError } = await supabase
         .from('quiz_questions')
         .select('id, question, type, options, order_index')
+        .eq('locale', preferredLocale)
         .order('order_index', { ascending: true })
 
       if (!active) return
@@ -71,7 +75,29 @@ export default function Quiz() {
         return
       }
 
-      setQuestions(dedupeQuestions((data ?? []) as QuizQuestion[]))
+      let rows = (data ?? []) as QuizQuestion[]
+      if (rows.length === 0 && preferredLocale !== 'en') {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('quiz_questions')
+          .select('id, question, type, options, order_index')
+          .eq('locale', 'en')
+          .order('order_index', { ascending: true })
+
+        if (!active) return
+        if (fallbackError) {
+          console.error('quiz_questions fallback fetch failed', {
+            code: fallbackError.code,
+            message: fallbackError.message,
+            details: fallbackError.details,
+          })
+          setError('Failed to load quiz. Please try again.')
+          setLoading(false)
+          return
+        }
+        rows = (fallbackData ?? []) as QuizQuestion[]
+      }
+
+      setQuestions(dedupeQuestions(rows))
       setLoading(false)
     }
 
