@@ -1,249 +1,214 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Card from '../components/Card'
-import { useAuth } from '../lib/auth'
+import Button from '../components/Button'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../lib/auth'
 
-type ProductRow = {
+type RecommendationItem = {
   id: string
   title: string
   brand: string | null
-  price_cents: number
-  images: string[] | null
+  price_krw: number | null
+  image_url: string | null
   tags: string[] | null
-  attributes: {
-    occasion?: string[] | string
-  } | null
+  match_score: number
 }
 
-type QuizAnswerRow = {
-  answer: string | string[] | number | null
-}
-
-type RecommendationRow = {
-  id: string
-  score: number
-  product: ProductRow
-}
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export default function Results() {
+  const navigate = useNavigate()
   const { currentUser } = useAuth()
+  const [searchParams] = useSearchParams()
+  const sid = useMemo(() => searchParams.get('sid')?.trim() ?? '', [searchParams])
   const [loading, setLoading] = useState(true)
+  const [recovering, setRecovering] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [items, setItems] = useState<RecommendationRow[]>([])
+  const [items, setItems] = useState<RecommendationItem[]>([])
+
+  const loadRecommendations = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+
+    try {
+      const { data, error: rpcError, status } = await supabase.rpc(
+        'get_recommendations',
+        {
+          p_submission_id: sid,
+          p_limit: 12,
+        },
+      )
+
+      if (rpcError) {
+        console.error('get_recommendations raw error', rpcError)
+        console.error('get_recommendations failed', {
+          status,
+          message: rpcError.message,
+          hint: rpcError.hint,
+          details: rpcError.details,
+          code: rpcError.code,
+        })
+        throw rpcError
+      }
+
+      const nextItems = (data ?? []) as RecommendationItem[]
+
+      if (nextItems.length === 0) {
+        console.error('products empty or no active rows', {
+          status,
+          message: 'RPC returned 0 recommendations',
+          hint: 'Seed products table and ensure active=true rows exist.',
+        })
+        setError('No products available yet. Please seed products and retry.')
+        setItems([])
+        return
+      }
+
+      if (nextItems.length < 8) {
+        console.error('not enough recommendations', {
+          status,
+          message: `Expected >= 8 items, got ${nextItems.length}`,
+          hint: 'Check products active rows and function logic.',
+        })
+      }
+
+      setItems(nextItems)
+    } catch (err) {
+      const casted = err as {
+        message?: string
+        hint?: string
+        code?: string
+      }
+      console.error('recommendations request failed', {
+        status: 'rpc_error',
+        message: casted?.message,
+        hint: casted?.hint,
+        code: casted?.code,
+      })
+      setError('Failed to generate recommendations. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }, [sid])
 
   useEffect(() => {
     let active = true
 
-    const run = async () => {
-      if (!currentUser) {
-        setError('Failed to generate recommendations')
-        setLoading(false)
+    const recoverSid = async () => {
+      if (!sid || !UUID_REGEX.test(sid)) {
+        console.error('sid recovery started', {
+          status: 'sid_missing_or_invalid',
+          message: sid ? `Invalid sid format: ${sid}` : 'Missing sid query parameter',
+        })
+
+        if (!currentUser) {
+          if (!active) return
+          setError('No quiz submission found. Please take the quiz.')
+          setRecovering(false)
+          setLoading(false)
+          return
+        }
+
+        const { data, error: latestError } = await supabase
+          .from('quiz_submissions')
+          .select('id')
+          .eq('user_id', currentUser.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (!active) return
+
+        if (latestError) {
+          console.error('sid recovery failed', latestError)
+          setError('Failed to generate recommendations. Please try again.')
+          setRecovering(false)
+          setLoading(false)
+          return
+        }
+
+        if (!data?.id) {
+          console.error('sid recovery no submission', {
+            status: 'not_found',
+            message: 'No quiz_submissions rows for current user',
+          })
+          setError('No quiz submission found. Please take the quiz.')
+          setRecovering(false)
+          setLoading(false)
+          return
+        }
+
+        const target = `/results?sid=${data.id}`
+        navigate(target, { replace: true })
+        setTimeout(() => {
+          if (!window.location.search.includes(`sid=${data.id}`)) {
+            window.location.assign(target)
+          }
+        }, 0)
         return
       }
 
-      const { data: answerData, error: answerError } = await supabase
-        .from('quiz_answers')
-        .select('answer')
-        .eq('user_id', currentUser.id)
-
-      if (answerError) {
-        console.error('quiz_answers fetch failed', {
-          code: answerError.code,
-          message: answerError.message,
-        })
-        throw answerError
-      }
-
-      const { data: productData, error: productError } = await supabase
-        .from('products')
-        .select('id, title, brand, price_cents, images, tags, attributes, active')
-        .eq('active', true)
-
-      if (productError) {
-        console.error('products fetch failed', {
-          code: productError.code,
-          message: productError.message,
-        })
-        throw productError
-      }
-
       if (!active) return
-
-      const { preferredTags, occasionTags, budget } = buildPreferences(
-        (answerData ?? []) as QuizAnswerRow[],
-      )
-
-      const recommendations = (productData ?? [])
-        .map((product) => {
-          const casted = product as ProductRow
-          const score = scoreProduct(casted, preferredTags, occasionTags, budget)
-          return { id: casted.id, product: casted, score }
-        })
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 12)
-
-      setItems(recommendations)
-      setLoading(false)
+      setRecovering(false)
     }
 
-    run().catch((err) => {
-      if (!active) return
-      console.error('recommendations failed', {
-        code: err?.code,
-        message: err?.message,
-      })
-      setError('Failed to generate recommendations')
-      setLoading(false)
-    })
+    void recoverSid()
 
     return () => {
       active = false
     }
-  }, [currentUser])
+  }, [currentUser, navigate, sid])
+
+  useEffect(() => {
+    if (recovering) return
+    void loadRecommendations()
+  }, [loadRecommendations, recovering])
 
   return (
     <section className="page results">
       <Card>
         <h1>Results</h1>
-        {loading ? <p>Generating your recommendations...</p> : null}
-        {error ? <p className="error">{error}</p> : null}
+        {recovering ? <p>Restoring your latest quiz submission...</p> : null}
+        {!recovering && loading ? <p>Generating your recommendations...</p> : null}
+        {error ? (
+          <div className="results-error-box">
+            <p className="error">{error}</p>
+            <Button onClick={loadRecommendations}>Retry</Button>
+          </div>
+        ) : null}
         {!loading && !error ? (
           <div className="results-grid">
-            {items.map((item) => {
-              const product = item.product
-              return (
-                <article key={item.id} className="result-card">
-                  <div className="result-media">
-                    {product.images?.[0] ? (
-                      <img src={product.images[0]} alt={product.title} />
-                    ) : (
-                      <div className="media-placeholder">No image</div>
-                    )}
+            {items.map((item) => (
+              <article key={item.id} className="result-card">
+                <div className="result-media">
+                  {item.image_url ? (
+                    <img src={item.image_url} alt={item.title} />
+                  ) : (
+                    <div className="media-placeholder">No image</div>
+                  )}
+                </div>
+                <div className="result-body">
+                  <div className="result-brand">{item.brand ?? 'OnlyOnes'}</div>
+                  <h3>{item.title}</h3>
+                  <p className="result-price">
+                    {typeof item.price_krw === 'number'
+                      ? `₩${item.price_krw.toLocaleString()}`
+                      : 'Price TBD'}
+                  </p>
+                  <p className="result-reason">Match score: {item.match_score}</p>
+                  <div className="result-tags">
+                    {(item.tags ?? []).slice(0, 5).map((tag) => (
+                      <span key={tag}>{tag}</span>
+                    ))}
                   </div>
-                  <div className="result-body">
-                    <div className="result-brand">{product.brand ?? 'OnlyOnes'}</div>
-                    <h3>{product.title}</h3>
-                    <p className="result-price">
-                      ${(product.price_cents / 100).toFixed(2)}
-                    </p>
-                    <div className="result-tags">
-                      {(product.tags ?? []).slice(0, 4).map((tag) => (
-                        <span key={tag}>{tag}</span>
-                      ))}
-                    </div>
-                  </div>
-                </article>
-              )
-            })}
+                </div>
+              </article>
+            ))}
           </div>
         ) : null}
       </Card>
     </section>
   )
-}
-
-type BudgetRange = {
-  min: number
-  max: number | null
-}
-
-const normalize = (value: string) => value.trim().toLowerCase()
-
-const budgetFromScale = (value: number): BudgetRange => {
-  switch (value) {
-    case 1:
-      return { min: 0, max: 30000 }
-    case 2:
-      return { min: 30000, max: 50000 }
-    case 3:
-      return { min: 50000, max: 100000 }
-    case 4:
-      return { min: 100000, max: 200000 }
-    case 5:
-      return { min: 200000, max: null }
-    default:
-      return { min: 0, max: null }
-  }
-}
-
-const buildPreferences = (answers: QuizAnswerRow[]) => {
-  const preferredTags = new Set<string>()
-  const occasionTags = new Set<string>()
-  let budget: BudgetRange | null = null
-
-  for (const row of answers) {
-    const value = row.answer
-    if (typeof value === 'string') {
-      preferredTags.add(normalize(value))
-      if (['work', 'casual', 'date', 'travel', 'workout', 'events'].includes(
-        normalize(value),
-      )) {
-        occasionTags.add(normalize(value))
-      }
-      continue
-    }
-
-    if (Array.isArray(value)) {
-      value
-        .filter((item): item is string => typeof item === 'string')
-        .forEach((item) => {
-          const normalized = normalize(item)
-          preferredTags.add(normalized)
-          if (
-            ['work', 'casual', 'date', 'travel', 'workout', 'events'].includes(
-              normalized,
-            )
-          ) {
-            occasionTags.add(normalized)
-          }
-        })
-      continue
-    }
-
-    if (typeof value === 'number') {
-      budget = budgetFromScale(value)
-    }
-  }
-
-  return { preferredTags, occasionTags, budget }
-}
-
-const scoreProduct = (
-  product: ProductRow,
-  preferredTags: Set<string>,
-  occasionTags: Set<string>,
-  budget: BudgetRange | null,
-) => {
-  let score = 0
-  const tags = (product.tags ?? []).map(normalize)
-  for (const tag of preferredTags) {
-    if (tags.includes(tag)) {
-      score += 2
-    }
-  }
-
-  const occasions = Array.isArray(product.attributes?.occasion)
-    ? product.attributes?.occasion ?? []
-    : product.attributes?.occasion
-      ? [product.attributes.occasion]
-      : []
-
-  const normalizedOccasions = occasions.map((item) => normalize(item))
-  for (const occ of occasionTags) {
-    if (normalizedOccasions.includes(occ)) {
-      score += 2
-    }
-  }
-
-  if (budget) {
-    if (budget.max !== null && product.price_cents > budget.max) {
-      score -= 2
-    } else if (product.price_cents >= budget.min) {
-      score += 2
-    } else {
-      score -= 1
-    }
-  }
-
-  return score
 }

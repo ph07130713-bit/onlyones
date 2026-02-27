@@ -1,190 +1,65 @@
-# React + TypeScript + Vite
+# OnlyOnes Supabase MVP
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Supabase(Postgres) 기반 StitchFix 벤치마킹 MVP입니다.
 
-Currently, two official plugins are available:
+## 핵심 흐름
+1. 사용자가 `/quiz`에서 답변 제출
+2. 프론트에서 답변 JSON을 `derived_tags`로 룰 기반 변환
+3. `quiz_submissions`에 `answers`, `derived_tags` 저장 후 `submission_id` 확보
+4. `/results?sid=<submission_id>` 이동
+5. Results에서 `rpc('get_recommendations')` 호출
+6. DB 함수가 `products`를 태그 교집합 점수(`match_score`)로 정렬하고 최소 8개 반환
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-## Supabase Auth Setup
-
-### Required `.env` variables
-
-```
-VITE_SUPABASE_URL=
-VITE_SUPABASE_ANON_KEY=
-```
-
-### Approved Redirect Domain
-
-Supabase Auth uses OAuth redirects. In the Supabase Console:
-
-1. Go to `Authentication` -> `URL Configuration`.
-2. Add your app domain to `Site URL` (and any local dev URLs you use).
-3. Add any additional redirect URLs under `Redirect URLs` if needed.
-
-If your domain is not listed, Google sign-in will be blocked after login.
-
-### Supabase Console Settings (Google OAuth)
-
-Enable the Google provider and set your OAuth credentials:
-
-1. `Authentication` -> `Providers` -> `Google` -> Enable.
-2. Add your `Client ID` and `Client Secret`.
-3. Add the Callback URL in the Google provider settings:
-
-```
-http://localhost:5173/auth/callback
-https://<your-domain>/auth/callback
-```
-
-4. Add the Redirect URLs in `Authentication` -> `URL Configuration`:
-
-```
-http://localhost:5173/auth/callback
-https://<your-domain>/auth/callback
-```
-
-### SQL: Create Tables
-
-Run the following in the Supabase SQL editor:
-
-```sql
--- Users
-create table if not exists users (
-  id text primary key,
-  email text not null,
-  created_at timestamp with time zone default timezone('utc', now()),
-  quiz_completed boolean default false,
-  subscription_status text default 'none'
-);
-
--- StyleProfiles
-create table if not exists style_profiles (
-  user_id text references users(id),
-  size_top text,
-  size_bottom text,
-  fit text,
-  price_min int,
-  price_max int,
-  style_tags text[],
-  color_tags text[],
-  avoid_tags text[],
-  primary key(user_id)
-);
-
--- Feedback
-create table if not exists feedback (
-  id bigserial primary key,
-  user_id text references users(id),
-  item_id text,
-  liked boolean,
-  created_at timestamp with time zone default timezone('utc', now())
-);
-```
-
-### Supabase CLI (Local Dev)
-
-The Supabase CLI initializes local configuration and can run Supabase locally. The typical flow is:
-
-```
-supabase init
-supabase start
-```
-
-After `supabase start`, use the printed `API URL` and `anon key` for `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env`.
-
-To apply migrations in `supabase/migrations`, use one of:
-
-```
+## 실행 순서
+1. 마이그레이션 적용
+```bash
 supabase db push
 ```
-
+2. 시드 적용 (로컬 전체 초기화 포함)
+```bash
+supabase db reset
 ```
-supabase migration up
-```
-
-Use the `supabase migration` commands to create and manage migrations.
-
-See the Supabase CLI docs for details.
-
-### Install and Run
-
-```
-npm i
+3. 앱 실행
+```bash
 npm run dev
 ```
+4. 로그인 후 `/quiz` 완료
+5. `/results?sid=<uuid>`에서 추천 8~20개 카드 확인
 
-Other scripts:
+## DB 구성
+- `public.products`
+- `public.quiz_submissions`
+- `public.get_recommendations(p_submission_id uuid, p_limit int default 12)`
 
+## 디버깅 가이드: "Failed to generate recommendations"
+
+### 1) RLS에 막히는 경우
+- 증상: RPC 에러 코드 `42501` 또는 권한 관련 메시지
+- 확인: `quiz_submissions`의 `user_id`와 현재 로그인 `auth.uid()`가 일치하는지
+- 예시 로그 (Results `console.error`):
+  - `status`
+  - `message`
+  - `hint`
+
+### 2) `products`가 비어있는 경우
+- 증상: 추천 결과가 0~소수개
+- 확인 SQL:
+```sql
+select count(*) from public.products where active = true;
 ```
-npm run build
-npm run lint
-npm run preview
-```
+- 조치: `supabase db reset` 또는 seed 재적용
+
+### 3) `sid` 누락/잘못된 uuid
+- 증상: Results에서 즉시 에러
+- 확인:
+  - URL에 `?sid=` 존재 여부
+  - UUID 형식 여부
+- RPC 내부 예외:
+  - `submission_not_found` (`P0002`) + hint: sid 확인
+
+## 핵심 코드 위치
+- Quiz 제출 + `derived_tags` 저장: `src/pages/Quiz.tsx`
+- 태그 추출 룰: `src/lib/quizTags.ts`
+- Results RPC 호출 + 로딩/에러/재시도: `src/pages/Results.tsx`
+- 스키마/RLS/RPC: `supabase/migrations/20260227120000_catalog_recommendations.sql`
+- 시드(40+ products): `supabase/seed.sql`

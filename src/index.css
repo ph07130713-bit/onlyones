@@ -401,3 +401,9 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+.results-error-box {
+  margin-top: 16px;
+  display: grid;
+  gap: 10px;
+}

@@ -4,6 +4,7 @@ import Card from '../components/Card'
 import Button from '../components/Button'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
+import { deriveTagsFromAnswers, type AnswerValue } from '../lib/quizTags'
 
 type QuizQuestion = {
   id: string
@@ -18,7 +19,26 @@ type QuizQuestion = {
   order_index: number
 }
 
-type AnswerValue = string | string[] | number
+const dedupeQuestions = (rows: QuizQuestion[]) => {
+  const seen = new Set<string>()
+  const unique: QuizQuestion[] = []
+
+  for (const row of rows) {
+    const key = `${row.type}::${row.question.trim().toLowerCase()}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(row)
+  }
+
+  if (rows.length !== unique.length) {
+    console.warn('quiz_questions duplicates removed', {
+      originalCount: rows.length,
+      dedupedCount: unique.length,
+    })
+  }
+
+  return unique
+}
 
 export default function Quiz() {
   const navigate = useNavigate()
@@ -34,13 +54,6 @@ export default function Quiz() {
     let active = true
 
     const loadQuestions = async () => {
-      if (import.meta.env.DEV) {
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-        console.info(
-          '[quiz] fetching:',
-          `${supabaseUrl}/rest/v1/quiz_questions?select=id,question,type,options,order_index&order=order_index.asc`,
-        )
-      }
       const { data, error: fetchError } = await supabase
         .from('quiz_questions')
         .select('id, question, type, options, order_index')
@@ -53,30 +66,12 @@ export default function Quiz() {
           message: fetchError.message,
           details: fetchError.details,
         })
-
-        const lowerMessage = fetchError.message.toLowerCase()
-        if (fetchError.code === 'PGRST205') {
-          setError('DB table not found (run migrations)')
-          setLoading(false)
-          return
-        }
-
-        if (
-          lowerMessage.includes('jwt') ||
-          lowerMessage.includes('permission') ||
-          lowerMessage.includes('rls')
-        ) {
-          setError('Permission denied (check RLS/policies)')
-          setLoading(false)
-          return
-        }
-
         setError('Failed to load quiz. Please try again.')
         setLoading(false)
         return
       }
 
-      setQuestions((data ?? []) as QuizQuestion[])
+      setQuestions(dedupeQuestions((data ?? []) as QuizQuestion[]))
       setLoading(false)
     }
 
@@ -151,25 +146,45 @@ export default function Quiz() {
     setError(null)
 
     try {
-      const rows = questions.map((question) => ({
-        user_id: currentUser.id,
-        question_id: question.id,
-        answer: answers[question.id] ?? null,
-      }))
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession()
+      console.log('session check', {
+        sessionError,
+        user: sessionData?.session?.user?.id,
+      })
 
-      await supabase.from('quiz_answers').delete().eq('user_id', currentUser.id)
+      const derivedTags = deriveTagsFromAnswers(answers)
 
-      const { error: insertError } = await supabase
-        .from('quiz_answers')
-        .insert(rows)
+      const { data: submission, error: submissionError } = await supabase
+        .from('quiz_submissions')
+        .insert({
+          answers,
+          derived_tags: derivedTags,
+        })
+        .select('id')
+        .single()
 
-      if (insertError) {
-        throw insertError
+      if (submissionError) {
+        console.error('quiz_submissions insert failed', {
+          message: submissionError.message,
+          details: submissionError.details,
+          hint: submissionError.hint,
+          code: submissionError.code,
+        })
+        throw submissionError
       }
 
-      navigate('/results', { replace: true })
+      if (!submission?.id) {
+        throw new Error('Submission insert succeeded but no submission id returned')
+      }
+
+      const target = `/results?sid=${submission.id}`
+      navigate(target, { replace: true })
+      setTimeout(() => {
+        window.location.assign(target)
+      }, 0)
     } catch (err) {
-      console.error(err)
+      console.error('quiz submission failed', err)
       setError('Failed to save your answers. Please try again.')
     } finally {
       setSaving(false)
