@@ -15,6 +15,8 @@ function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={<Landing />} />
+        <Route path="ko" element={<Landing />} />
+        <Route path="en" element={<Landing />} />
         <Route path="login" element={<Login />} />
         <Route path="auth/callback" element={<AuthCallback />} />
         <Route element={<ProtectedRoute />}>

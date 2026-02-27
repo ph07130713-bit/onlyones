@@ -385,6 +385,16 @@ button:focus-visible {
   align-items: center;
 }
 
+.lang-select {
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  padding: 8px 10px;
+  background: #ffffff;
+  color: #0f172a;
+  font-family: inherit;
+  font-size: 13px;
+}
+
 .app-main {
   flex: 1;
 }
